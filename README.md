@@ -221,7 +221,8 @@ No credentials, private keys, or private IPs are committed to this repository.
 **TODO (fill in before submission):**
 - ![localHost](docs/localhost.png)
 - ![error 404](docs/error_404.png)
-- 
+- ![deploy](docs/deploy.png)
+- ![port](<docs/evidence port.png>)
 
 
 ## 12. Known limitations
@@ -237,15 +238,15 @@ This server is intentionally **not production-ready**:
 
 ## 13. Author and acknowledgment
 
-**TODO:** Author name, student ID. Built for the AREM Networking Lab · Part 2
+Cristian Adrian Ducuara Quiñonez. Built for the AREP Networking Lab · Part 2
 course assignment. External references used: the official AWS EC2 documentation
-linked in the lab guide (launching an instance, connecting via SSH).
+linked in the lab guide (From a Minimal HTTP Server to a Web Application on AWS--moodle).
 
 ---
 
 ## Discussion questions (section 8.2)
 
-**TODO — answer in your own words before submission; short outlines below:**
+**Answers :**
 
 1. *Why does a single HTML page cause several HTTP requests?* Because the HTML
    document references separate resources (script, images) that the browser
