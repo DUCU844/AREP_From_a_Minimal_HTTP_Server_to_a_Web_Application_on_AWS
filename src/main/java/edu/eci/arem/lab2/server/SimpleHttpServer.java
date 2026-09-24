@@ -1,6 +1,8 @@
 package edu.eci.arem.lab2.server;
 
-import edu.eci.arem.lab2.handler.ApiHandler;
+import edu.eci.arem.lab2.framework.Response;
+import edu.eci.arem.lab2.framework.Router;
+import edu.eci.arem.lab2.framework.Service;
 import edu.eci.arem.lab2.handler.StaticFileHandler;
 import edu.eci.arem.lab2.http.HttpRequest;
 import edu.eci.arem.lab2.http.HttpRequestParser;
@@ -31,12 +33,17 @@ public final class SimpleHttpServer {
 
     private final int port;
     private final StaticFileHandler staticFileHandler;
-    private final ApiHandler apiHandler;
+    private final Router router;
+    private boolean running = true;
 
-    public SimpleHttpServer(int port, Path webRoot) {
-        this.port = port;
-        this.staticFileHandler = new StaticFileHandler(webRoot);
-        this.apiHandler = new ApiHandler();
+    public SimpleHttpServer(int port, Path webRoot, Router router) {
+    this.port = port;
+    this.staticFileHandler = new StaticFileHandler(webRoot);
+    this.router = router;
+    }
+
+    public void stop() {
+        running = false;
     }
 
     /** Binds on all interfaces (0.0.0.0), not just loopback, so it is reachable remotely (e.g. from EC2). */
@@ -45,7 +52,7 @@ public final class SimpleHttpServer {
             serverSocket.bind(new InetSocketAddress(port));
             System.out.println("Server listening on port " + port + " (sequential, single connection at a time)");
 
-            while (true) {
+            while (running) {
                 try (Socket clientSocket = serverSocket.accept()) {
                     handleConnection(clientSocket);
                 } catch (IOException e) {
@@ -53,6 +60,7 @@ public final class SimpleHttpServer {
                     System.err.println("Error handling connection: " + e.getMessage());
                 }
             }
+            System.out.println("Server stopped gracefully.");
         }
     }
 
@@ -74,8 +82,11 @@ public final class SimpleHttpServer {
 
             logRequest(request);
 
-            if (apiHandler.canHandle(request.getPath())) {
-                apiHandler.handle(request, out);
+            Service service = router.resolve(request.getPath());
+            if (service != null) {
+                Response frameworkResponse = new Response();
+                String body = service.handle(request, frameworkResponse);
+                HttpResponse.sendText(out, 200, "OK", frameworkResponse.getContentType(), body);
             } else {
                 staticFileHandler.handle(request, out);
             }

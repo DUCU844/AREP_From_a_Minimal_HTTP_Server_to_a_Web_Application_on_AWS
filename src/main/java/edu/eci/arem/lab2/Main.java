@@ -1,9 +1,13 @@
 package edu.eci.arem.lab2;
 
+import static edu.eci.arem.lab2.framework.WebFramework.*;
+
 import edu.eci.arem.lab2.server.SimpleHttpServer;
+import edu.eci.arem.lab2.util.JsonUtil;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Instant;
 
 /**
  * Entry point.
@@ -19,26 +23,42 @@ import java.nio.file.Path;
  */
 public final class Main {
 
-    private static final int DEFAULT_PORT = 8080;
-    private static final String DEFAULT_WEBROOT = "webroot";
+    public static void main(String[] args) throws Exception {
+        staticfiles(System.getenv().getOrDefault("STATIC_FILES_PATH", "webroot"));
 
-    public static void main(String[] args) throws IOException {
-        int port = DEFAULT_PORT;
-        String webRootArg = DEFAULT_WEBROOT;
+        get("/api/greeting", (req, resp) -> {
+            resp.setContentType("application/json; charset=UTF-8");
+            String name = req.getQueryParams().get("name");
+            if (name == null || name.isBlank()) name = "world";
+            String prefix = System.getenv().getOrDefault("GREETING_PREFIX", "Hello");
+            return "{\"greeting\":\"" + prefix + ", " + JsonUtil.escape(name) + "!\"}";
+        });
 
-        if (args.length >= 1) {
-            try {
-                port = Integer.parseInt(args[0]);
-            } catch (NumberFormatException e) {
-                System.err.println("Invalid port '" + args[0] + "', falling back to " + DEFAULT_PORT);
-            }
+        get("/api/square", (req, resp) -> {
+            resp.setContentType("application/json; charset=UTF-8");
+            String raw = req.getQueryParams().get("value");
+            double value = (raw == null || raw.isBlank()) ? 0 : Double.parseDouble(raw);
+            return "{\"input\":" + value + ",\"square\":" + (value * value) + "}";
+        });
+
+        get("/api/time", (req, resp) -> {
+            resp.setContentType("application/json; charset=UTF-8");
+            return "{\"serverTime\":\"" + JsonUtil.escape(Instant.now().toString()) + "\"}";
+        });
+
+        get("/api/health", (req, resp) -> {
+            resp.setContentType("application/json; charset=UTF-8");
+            return "{\"status\":\"UP\"}";
+        });
+
+        String environment = System.getenv().getOrDefault("APP_ENV", "development");
+        if (environment.equals("development")) {
+            get("/shutdown", (req, resp) -> {
+                stop();
+                return "Server will stop after this response.";
+            });
         }
-        if (args.length >= 2) {
-            webRootArg = args[1];
-        }
 
-        Path webRoot = Path.of(webRootArg);
-        SimpleHttpServer server = new SimpleHttpServer(port, webRoot);
-        server.start();
+        start();
     }
 }
