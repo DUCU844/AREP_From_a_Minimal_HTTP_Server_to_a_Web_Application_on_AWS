@@ -2,11 +2,8 @@ package edu.eci.arem.lab2;
 
 import static edu.eci.arem.lab2.framework.WebFramework.*;
 
-import edu.eci.arem.lab2.server.SimpleHttpServer;
 import edu.eci.arem.lab2.util.JsonUtil;
 
-import java.io.IOException;
-import java.nio.file.Path;
 import java.time.Instant;
 
 /**

@@ -244,6 +244,86 @@ linked in the lab guide (From a Minimal HTTP Server to a Web Application on AWS-
 
 ---
 
+## 14. Web Framework Extension — Maintainable Application Server
+ 
+This section documents the evolution of the sequential HTTP server described
+in sections 1–13 above into a small lambda-based web framework, per the
+"Building and Deploying a Maintainable Application Server" assignment.
+Nothing above this section changed behavior; this is additive. The framework
+API lives in `edu.eci.arem.lab2.framework` (`Router`, `Service`, `Response`,
+`WebFramework`); `ApiHandler` was retired, and its four routes now register
+through `get(...)` in `Main.java`.
+ 
+### 14.1 Extended metaphor
+Reusing the single-window teller counter metaphor from section 2: the
+**lobby directory** (`Router`) tells the teller which reference-sheet
+procedure (`Service` lambda) to run for a given request, so adding a new
+procedure means updating the directory — not retraining the teller.
+`WebFramework` is the counter's manager: it decides which directory and
+which filing cabinet path (`staticfiles(...)`) are in use before the counter
+opens for the day (`start()`), and can call "closing time" (`stop()`) once
+the current customer has been fully served.
+ 
+### 14.2 Framework API used
+| Method | Purpose |
+|---|---|
+| `staticfiles(String root)` | Sets the static-resource root directory |
+| `get(String path, Service service)` | Registers a GET route with a lambda handler |
+| `start()` / `start(int port)` | Starts the sequential server |
+| `stop()` | Marks the server to stop after the current response is sent |
+ 
+### 14.3 New/updated environment variables
+| Variable | Purpose | Local default |
+|---|---|---|
+| `PORT` | HTTP server port | `8080` |
+| `GREETING_PREFIX` | Prefix used by `/api/greeting` | `Hello` |
+| `APP_ENV` | `development` enables `/shutdown`; any other value disables it | `development` |
+| `STATIC_FILES_PATH` | Root folder for static resources | `webroot` |
+ 
+### 14.4 How to run locally (updated)
+```bash
+mvn package
+PORT=8080 APP_ENV=development GREETING_PREFIX=Hello \
+  java -jar target/networking-lab2.jar
+```
+`args[]` is no longer read by `Main`; all configuration is environment-based
+(section 7 above, describing CLI arguments for port/webroot, is superseded
+by this).
+ 
+### 14.5 Cloud deployment (updated)
+Same EC2 instance/process as section 10, with the systemd unit now setting
+environment variables instead of passing CLI args:
+```ini
+[Service]
+WorkingDirectory=/home/ec2-user/app
+Environment=PORT=8080
+Environment=APP_ENV=production
+Environment=GREETING_PREFIX=Hola
+ExecStart=/usr/bin/java -jar networking-lab2.jar
+Restart=on-failure
+```
+**Cloud platform:** AWS EC2 (same instance as section 10).
+**Public URL:** `http://<TODO-instance-ip>:8080/`
+ 
+### 14.6 Example URLs
+- Static: `http://<ip>:8080/`, `http://<ip>:8080/styles.css`, `http://<ip>:8080/images/logo.png`
+- Dynamic: `http://<ip>:8080/api/greeting?name=Pedro`, `http://<ip>:8080/api/square?value=7`
+- Dev-only: `http://<ip>:8080/shutdown` (expect 404 in production)
+
+### 14.7 Additional tests
+```bash
+curl -s "http://localhost:8080/api/greeting"                          # missing name -> defaults to "world"
+curl -s -o /dev/null -w "%{http_code}\n" "http://<ip>:8080/shutdown"  # 404 expected when APP_ENV=production
+```
+ 
+### 14.8 Why this stays maintainable
+Adding a new service now means one `get(...)` call in `Main.java` — no edits
+to `SimpleHttpServer`, `Router`, or the socket-handling loop. Routing,
+request parsing, static-file resolution, and the accept loop remain four
+separately testable components, each with one responsibility.
+
+---
+
 ## Discussion questions (section 8.2)
 
 **Answers :**
