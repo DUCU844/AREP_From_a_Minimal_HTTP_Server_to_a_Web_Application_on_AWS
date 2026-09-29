@@ -193,7 +193,7 @@ for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " http://localhos
    java -jar networking-lab2.jar 8080 webroot
    ```
 5. Verify `curl http://localhost:8080/api/health` from *inside* the instance first,
-   then `http://<TODO: instance-public-ip>:8080/` from your own machine.
+   then `http://<instance-public-ip>:8080/` from your own machine.
 6. The current deployment path is Docker. The systemd unit below is retained only
   as a historical alternative for the pre-container lab.
 
@@ -223,11 +223,16 @@ No credentials, private keys, or private IPs are committed to this repository.
 
 ## 11. Evidence and results
 
-**TODO (fill in before submission):**
+Evidence captured during local and EC2 deployment:
 - ![localHost](docs/localhost.png)
 - ![error 404](docs/error_404.png)
 - ![deploy](docs/deploy.png)
 - ![port](<docs/evidence port.png>)
+- ![Docker local](docs/localhost_docker.png)
+- ![Docker shutdown](docs/shutdown.png)
+- ![EC2 health and greeting](docs/lh_health_greeting.png)
+- ![EC2 square and slow endpoint](docs/lh_square_slow.png)
+- ![Docker deployment](docs/docker_ec2_deploy.png)
 
 
 ## 12. Known limitations
@@ -301,7 +306,7 @@ The current deployment uses Docker as documented in section 15. The old systemd
 process configuration from the first deployment stage remains above only as a
 historical alternative.
 **Cloud platform:** AWS EC2 (same instance as section 10).
-**Public URL:** `<TODO: public EC2 URL>`
+**Public URL:** `<public EC2 URL>`
  
 ### 14.6 Example URLs
 - Static: `http://<ip>:8080/`, `http://<ip>:8080/styles.css`, `http://<ip>:8080/images/logo.png`
@@ -392,11 +397,11 @@ curl -i http://localhost:8080/shutdown
 
 ```bash
 mvn package
-docker build -t <TODO: dockerhub-user>/networking-lab2:latest .
+docker build -t <dockerhub-user>/networking-lab2:latest .
 docker run --name networking-lab2 -p 8080:8080 \
   -e APP_ENV=production -e POOL_SIZE=4 \
   --restart unless-stopped \
-  <TODO: dockerhub-user>/networking-lab2:latest
+  <dockerhub-user>/networking-lab2:latest
 curl -i http://localhost:8080/api/health
 docker stop networking-lab2
 ```
@@ -412,7 +417,7 @@ so the image build, health request, and stop-log verification remain TODO.
 2. Install Docker on the instance and authenticate to the registry if needed.
 3. Publish and pull the image:
    ```bash
-   docker pull <TODO: dockerhub-user>/networking-lab2:latest
+   docker pull <dockerhub-user>/networking-lab2:latest
    ```
 4. Run it with restart policy and production configuration:
    ```bash
@@ -420,24 +425,22 @@ so the image build, health request, and stop-log verification remain TODO.
      -p 8080:8080 \
      -e PORT=8080 -e APP_ENV=production \
      --restart unless-stopped \
-     <TODO: dockerhub-user>/networking-lab2:latest
+     <dockerhub-user>/networking-lab2:latest
    ```
 5. Verify locally on the instance with `curl http://localhost:8080/api/health`,
    then verify the public endpoint after the security group is active.
 
-**Docker Hub URL:** `<TODO: Docker Hub repository URL>`
-**Public EC2 URL:** `<TODO: public EC2 DNS or IP URL>`
+**Docker Hub URL:** <https://hub.docker.com/r/ducu04/networking-lab2>
+**Public EC2 URL:** <http://18.214.99.26:8080/>
 
 ### 15.7 Evidence and remaining limitations
 
-- Concurrency measurement before extension: `<TODO: N requests took ... ms>`.
-- Concurrency measurement with extension: `<TODO: N requests took ... ms>`.
-- Docker build/health/stop evidence: `<TODO: capture terminal output or screenshot>`.
-- EC2 evidence: `<TODO: capture security group, running container, and health response>`.
-- Commit evidence: `<TODO: commit hash + link>`.
-- Remaining limitations: GET-only API, no TLS, authentication, persistence, or
-  load balancing; static resources remain local to each container; no production
-  observability or request backpressure policy beyond the fixed pool.
+- ![EC2 health and greeting](docs/lh_health_greeting.png)
+- ![EC2 square and slow endpoint](docs/lh_square_slow.png)
+- ![Docker local](docs/localhost_docker.png)
+- ![Docker shutdown](docs/shutdown.png)
+- ![Docker build, health and stop](docs/docker_despock.png)
+- ![Docker EC2 deployment](docs/docker_ec2_deploy.png)
 
 ---
 
