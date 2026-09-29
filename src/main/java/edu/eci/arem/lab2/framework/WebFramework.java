@@ -3,6 +3,7 @@ package edu.eci.arem.lab2.framework;
 import java.io.IOException;
 import java.nio.file.Path;
 
+import edu.eci.arem.lab2.config.ServerConfig;
 import edu.eci.arem.lab2.server.SimpleHttpServer;
 
 public class WebFramework {
@@ -19,7 +20,7 @@ public class WebFramework {
     }
 
     public static void start() throws IOException {
-        start(resolvePort());
+        start(ServerConfig.fromEnvironment(System.getenv()));
     }
 
     public static void start(int port) throws IOException {
@@ -27,12 +28,14 @@ public class WebFramework {
         serverInstance.start();
     }
 
+    public static void start(ServerConfig config) throws IOException {
+        serverInstance = new SimpleHttpServer(config.getPort(), Path.of(config.getStaticFilesPath()), router,
+                config.getPoolSize(), config.getShutdownTimeoutSeconds());
+        serverInstance.start();
+    }
+
     public static void stop() {
         if (serverInstance != null) serverInstance.stop();
     }
     
-    private static int resolvePort() {
-        String portValue = System.getenv("PORT");
-        return (portValue == null || portValue.isBlank()) ? 8080 : Integer.parseInt(portValue);
-    }
 }
