@@ -1,0 +1,12 @@
+services:
+  networking-lab2:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      STATIC_FILES_PATH: webroot
+      APP_ENV: production
+      POOL_SIZE: "4"
+      SHUTDOWN_TIMEOUT_SECONDS: "10"
+    restart: unless-stopped
