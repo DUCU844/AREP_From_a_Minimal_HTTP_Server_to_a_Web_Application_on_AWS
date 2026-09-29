@@ -29,7 +29,13 @@ public final class Main {
         get("/api/square", (req, resp) -> {
             resp.setContentType("application/json; charset=UTF-8");
             String raw = req.getQueryParams().get("value");
-            double value = (raw == null || raw.isBlank()) ? 0 : Double.parseDouble(raw);
+            double value;
+            try {
+                value = (raw == null || raw.isBlank()) ? 0 : Double.parseDouble(raw);
+            } catch (NumberFormatException e) {
+                resp.setStatus(400, "Bad Request");
+                return "{\"error\":\"value must be a valid number\"}";
+            }
             return "{\"input\":" + value + ",\"square\":" + (value * value) + "}";
         });
 
@@ -55,9 +61,11 @@ public final class Main {
                 try {
                     milliseconds = Long.parseLong(rawMilliseconds == null ? "" : rawMilliseconds);
                 } catch (NumberFormatException e) {
+                    resp.setStatus(400, "Bad Request");
                     return "{\"error\":\"ms must be an integer between 0 and 10000\"}";
                 }
                 if (milliseconds < 0 || milliseconds > 10_000) {
+                    resp.setStatus(400, "Bad Request");
                     return "{\"error\":\"ms must be an integer between 0 and 10000\"}";
                 }
                 try {

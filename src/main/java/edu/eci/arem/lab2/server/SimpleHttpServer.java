@@ -142,7 +142,8 @@ public final class SimpleHttpServer {
                 }
                 Response frameworkResponse = new Response();
                 String body = service.handle(request, frameworkResponse);
-                HttpResponse.sendText(out, 200, "OK", frameworkResponse.getContentType(), body);
+                HttpResponse.sendText(out, frameworkResponse.getStatusCode(), frameworkResponse.getReasonPhrase(),
+                    frameworkResponse.getContentType(), body);
             } else {
                 staticFileHandler.handle(request, out);
             }
