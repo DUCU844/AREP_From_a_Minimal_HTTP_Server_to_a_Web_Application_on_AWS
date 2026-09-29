@@ -1,7 +1,7 @@
 package edu.eci.arem.lab2;
 
+import edu.eci.arem.lab2.config.ServerConfig;
 import static edu.eci.arem.lab2.framework.WebFramework.*;
-
 import edu.eci.arem.lab2.util.JsonUtil;
 
 import java.time.Instant;
@@ -9,32 +9,33 @@ import java.time.Instant;
 /**
  * Entry point.
  *
- * Usage:
- *   java -jar networking-lab2.jar [port] [webRootPath]
- *
- * Both arguments are optional:
- *   - port defaults to 8080
- *   - webRootPath defaults to "webroot" (relative to the working directory),
- *     which is what lets the exact same jar run locally and on EC2: you
- *     just place the jar next to the webroot/ folder in both places.
+ * Configuration is read from environment variables so the same jar runs locally
+ * and in a container without command-line-specific deployment scripts.
  */
 public final class Main {
 
     public static void main(String[] args) throws Exception {
-        staticfiles(System.getenv().getOrDefault("STATIC_FILES_PATH", "webroot"));
+        ServerConfig config = ServerConfig.fromEnvironment(System.getenv());
+        staticfiles(config.getStaticFilesPath());
 
         get("/api/greeting", (req, resp) -> {
             resp.setContentType("application/json; charset=UTF-8");
             String name = req.getQueryParams().get("name");
             if (name == null || name.isBlank()) name = "world";
-            String prefix = System.getenv().getOrDefault("GREETING_PREFIX", "Hello");
-            return "{\"greeting\":\"" + prefix + ", " + JsonUtil.escape(name) + "!\"}";
+                return "{\"greeting\":\"" + config.getGreetingPrefix() + ", "
+                    + JsonUtil.escape(name) + "!\"}";
         });
 
         get("/api/square", (req, resp) -> {
             resp.setContentType("application/json; charset=UTF-8");
             String raw = req.getQueryParams().get("value");
-            double value = (raw == null || raw.isBlank()) ? 0 : Double.parseDouble(raw);
+            double value;
+            try {
+                value = (raw == null || raw.isBlank()) ? 0 : Double.parseDouble(raw);
+            } catch (NumberFormatException e) {
+                resp.setStatus(400, "Bad Request");
+                return "{\"error\":\"value must be a valid number\"}";
+            }
             return "{\"input\":" + value + ",\"square\":" + (value * value) + "}";
         });
 
@@ -48,14 +49,34 @@ public final class Main {
             return "{\"status\":\"UP\"}";
         });
 
-        String environment = System.getenv().getOrDefault("APP_ENV", "development");
-        if (environment.equals("development")) {
+        if ("development".equals(config.getAppEnvironment())) {
             get("/shutdown", (req, resp) -> {
                 stop();
                 return "Server will stop after this response.";
             });
+            get("/api/slow", (req, resp) -> {
+                resp.setContentType("application/json; charset=UTF-8");
+                String rawMilliseconds = req.getQueryParams().get("ms");
+                long milliseconds;
+                try {
+                    milliseconds = Long.parseLong(rawMilliseconds == null ? "" : rawMilliseconds);
+                } catch (NumberFormatException e) {
+                    resp.setStatus(400, "Bad Request");
+                    return "{\"error\":\"ms must be an integer between 0 and 10000\"}";
+                }
+                if (milliseconds < 0 || milliseconds > 10_000) {
+                    resp.setStatus(400, "Bad Request");
+                    return "{\"error\":\"ms must be an integer between 0 and 10000\"}";
+                }
+                try {
+                    Thread.sleep(milliseconds);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return "{\"sleptMs\":" + milliseconds + "}";
+            });
         }
 
-        start();
+        start(config);
     }
 }

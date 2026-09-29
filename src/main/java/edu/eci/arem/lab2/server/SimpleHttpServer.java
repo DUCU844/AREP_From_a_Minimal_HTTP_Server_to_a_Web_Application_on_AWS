@@ -15,57 +15,108 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Deliberately sequential HTTP server.
- *
- * The ServerSocket (listening socket) is opened once and stays open for the
- * whole process lifetime. For every accepted connection, the request is
- * fully read, handled, and responded to -- and the client Socket is closed
- * -- BEFORE accept() is called again. There is no thread pool, no executor,
- * no concurrent handling of any kind: this is intentional (see the lab's
- * "why scalability" motivation). A malformed request from one client must
- * never take down the listening loop.
+ * Small HTTP server with one acceptor thread and a fixed worker pool.
  */
 public final class SimpleHttpServer {
 
+    private static final int SOCKET_READ_TIMEOUT_MILLIS = 10_000;
     private final int port;
     private final StaticFileHandler staticFileHandler;
     private final Router router;
-    private boolean running = true;
+    private final int poolSize;
+    private final int shutdownTimeoutSeconds;
+    private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicBoolean shutdownStarted = new AtomicBoolean(false);
+    private final AtomicBoolean shutdownLogged = new AtomicBoolean(false);
+    private volatile ServerSocket serverSocket;
+    private volatile ExecutorService pool;
+    private volatile Thread shutdownHook;
 
     public SimpleHttpServer(int port, Path webRoot, Router router) {
-    this.port = port;
-    this.staticFileHandler = new StaticFileHandler(webRoot);
-    this.router = router;
+        this(port, webRoot, router,
+                Math.max(1, Runtime.getRuntime().availableProcessors() * 2), 10);
+    }
+
+    public SimpleHttpServer(int port, Path webRoot, Router router, int poolSize,
+                            int shutdownTimeoutSeconds) {
+        this.port = port;
+        this.staticFileHandler = new StaticFileHandler(webRoot);
+        this.router = router;
+        this.poolSize = Math.max(1, poolSize);
+        this.shutdownTimeoutSeconds = Math.max(1, shutdownTimeoutSeconds);
     }
 
     public void stop() {
-        running = false;
+        shutdown();
     }
 
-    /** Binds on all interfaces (0.0.0.0), not just loopback, so it is reachable remotely (e.g. from EC2). */
+    /** Binds on all interfaces so the server is reachable remotely, including from EC2. */
     public void start() throws IOException {
-        try (ServerSocket serverSocket = new ServerSocket()) {
-            serverSocket.bind(new InetSocketAddress(port));
-            System.out.println("Server listening on port " + port + " (sequential, single connection at a time)");
+        ServerSocket listeningSocket = new ServerSocket();
+        listeningSocket.bind(new InetSocketAddress(port));
+        serverSocket = listeningSocket;
+        pool = Executors.newFixedThreadPool(poolSize, workerThreadFactory());
+        running.set(true);
+        shutdownHook = new Thread(this::shutdown, "networking-lab2-shutdown-hook");
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
+        System.out.println("Server listening on port " + port + " with " + poolSize + " worker threads");
 
-            while (running) {
-                try (Socket clientSocket = serverSocket.accept()) {
-                    handleConnection(clientSocket);
+        try {
+            while (running.get()) {
+                try {
+                    Socket clientSocket = listeningSocket.accept();
+                    try {
+                        pool.execute(() -> handleClient(clientSocket));
+                    } catch (RejectedExecutionException e) {
+                        closeQuietly(clientSocket);
+                        if (running.get()) {
+                            System.err.println("Request rejected while server is running: " + e.getMessage());
+                        }
+                    }
+                } catch (SocketException e) {
+                    if (running.get()) {
+                        System.err.println("Error accepting connection: " + e.getMessage());
+                    }
+                    break;
                 } catch (IOException e) {
-                    // A single bad connection must not crash the listening loop.
-                    System.err.println("Error handling connection: " + e.getMessage());
+                    System.err.println("Error accepting connection: " + e.getMessage());
                 }
             }
-            System.out.println("Server stopped gracefully.");
+        } finally {
+            shutdown();
+            removeShutdownHook();
+        }
+    }
+
+    private ThreadFactory workerThreadFactory() {
+        return runnable -> {
+            Thread worker = new Thread(runnable, "networking-lab2-worker");
+            worker.setDaemon(false);
+            return worker;
+        };
+    }
+
+    private void handleClient(Socket clientSocket) {
+        try (Socket socket = clientSocket) {
+            handleConnection(socket);
+        } catch (Exception e) {
+            System.err.println("Error handling connection: " + e.getMessage());
         }
     }
 
     private void handleConnection(Socket clientSocket) throws IOException {
-        clientSocket.setSoTimeout(10_000);
+        clientSocket.setSoTimeout(SOCKET_READ_TIMEOUT_MILLIS);
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(clientSocket.getInputStream(), StandardCharsets.UTF_8));
@@ -84,9 +135,15 @@ public final class SimpleHttpServer {
 
             Service service = router.resolve(request.getPath());
             if (service != null) {
+                if (!"GET".equalsIgnoreCase(request.getMethod())) {
+                    HttpResponse.sendText(out, 405, "Method Not Allowed", "text/plain; charset=UTF-8",
+                            "405 Method Not Allowed: only GET is supported by this server.");
+                    return;
+                }
                 Response frameworkResponse = new Response();
                 String body = service.handle(request, frameworkResponse);
-                HttpResponse.sendText(out, 200, "OK", frameworkResponse.getContentType(), body);
+                HttpResponse.sendText(out, frameworkResponse.getStatusCode(), frameworkResponse.getReasonPhrase(),
+                    frameworkResponse.getContentType(), body);
             } else {
                 staticFileHandler.handle(request, out);
             }
@@ -95,5 +152,70 @@ public final class SimpleHttpServer {
 
     private void logRequest(HttpRequest request) {
         System.out.printf("%s %s%n", request.getMethod(), request.getPath());
+    }
+
+    private void shutdown() {
+        if (shutdownStarted.compareAndSet(false, true)) {
+            System.out.println("Server shutdown started.");
+            running.set(false);
+            closeQuietly(serverSocket);
+            ExecutorService currentPool = pool;
+            if (currentPool != null) {
+                currentPool.shutdown();
+            }
+        }
+
+        if (Thread.currentThread().getName().startsWith("networking-lab2-worker")) {
+            return;
+        }
+        completeShutdown();
+    }
+
+    private void completeShutdown() {
+        ExecutorService currentPool = pool;
+        if (currentPool != null) {
+            try {
+                if (!currentPool.awaitTermination(shutdownTimeoutSeconds, TimeUnit.SECONDS)) {
+                    System.err.println("Shutdown timeout reached; interrupting remaining workers.");
+                    currentPool.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                currentPool.shutdownNow();
+                System.err.println("Shutdown interrupted; remaining workers were interrupted.");
+            }
+        }
+        if (shutdownLogged.compareAndSet(false, true)) {
+            System.out.println("Server shutdown completed.");
+        }
+    }
+
+    private void removeShutdownHook() {
+        Thread hook = shutdownHook;
+        if (hook != null && hook != Thread.currentThread()) {
+            try {
+                Runtime.getRuntime().removeShutdownHook(hook);
+            } catch (IllegalStateException ignored) {
+                // The JVM is already shutting down.
+            }
+        }
+    }
+
+    private static void closeQuietly(ServerSocket socket) {
+        if (socket != null) {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+                // Closing during shutdown is best effort.
+            }
+        }
+    }
+
+    private static void closeQuietly(Socket socket) {
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+            // Closing a rejected connection is best effort.
+        }
     }
 }

@@ -1,0 +1,12 @@
+.git
+.idea
+*.iml
+.vscode
+docs
+target/*.original
+target/classes
+target/generated-sources
+target/generated-test-sources
+target/maven-status
+target/test-classes
+target/surefire-reports
