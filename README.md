@@ -2,39 +2,42 @@
 
 ## 1. Project description
 
-This project extends a minimal, socket-based Java HTTP server into a small sequential
-web application. It serves static resources (HTML, JavaScript, images), exposes four
-hardcoded JSON services, and runs both locally and on a single AWS EC2 instance.
+This project extends a minimal, socket-based Java HTTP server into a small web
+application. It serves static resources (HTML, JavaScript, images), exposes JSON
+services, and can run locally, in Docker, or on a single AWS EC2 instance.
 
 The problem it addresses is pedagogical: before distributing load across multiple
 servers or threads, it is necessary to understand what a single, sequential server
 actually does — where requests wait, what one connection costs, and which design
 decisions (statelessness, explicit routing, byte-accurate responses) make future
 concurrency and distribution possible. This lab intentionally stops short of
-concurrency: **no threads, thread pools, or routing frameworks are used.**
+concurrency: **the base stage used no threads or thread pools. The extension in
+section 15 introduces bounded concurrency and graceful shutdown without adding a
+web framework.**
 
 ## 2. System metaphor and architecture
 
-**Metaphor: a single-window teller counter.** Imagine one bank teller (the server)
-serving one customer (an HTTP connection) at a time, from one counter (the
-`ServerSocket`, bound once and kept open for the life of the process). A customer
+**Metaphor: several teller counters.** The base lab had one bank teller (the server)
+serving one customer (an HTTP connection) at a time. The extension adds several
+tellers (pool workers) serving customers in parallel while sharing the same filing
+cabinet (the static directory) and lobby directory (the router). The `ServerSocket`
+is still the single entrance, and an acceptor assigns each customer to a teller.
+A customer
 walks up, hands over a slip of paper with a request (the HTTP request line), the
 teller reads it, does exactly one of three things — hands over a form/photo from
 the filing cabinet (a static resource), performs one of four fixed calculations from
 a printed reference sheet (a hardcoded service), or says "that's not something we
-handle" (404/405/400) — and only then calls the next customer. The teller never
-starts a second customer's request before finishing the first: that is the sequential
-constraint at the heart of this lab. The browser is the customer's assistant: it can
-prepare and send several slips at once *from the customer's side* (the asynchronous
-JS client), but the teller counter itself still processes them one at a time.
+handle" (404/405/400). The browser is the customer's assistant: it can prepare and
+send several slips at once from the asynchronous JS client, and the extension now
+lets the server process those connections concurrently.
 
 **Components and responsibilities:**
 
 - **Browser (JS client, `webroot/app.js`)** — sends `fetch()` requests to
   `/api/...` endpoints without reloading the page; shows loading/result/error states.
 - **HTTP request line over TCP** — the protocol contract between browser and server.
-- **`SimpleHttpServer`** — owns the listening `ServerSocket`; accepts one connection
-  at a time, in a loop, forever. This is the counter.
+- **`SimpleHttpServer`** — owns the listening `ServerSocket`; its acceptor delegates
+  connections to a fixed worker pool and coordinates graceful shutdown.
 - **`HttpRequestParser` / `HttpRequest`** — reads raw bytes off the socket and turns
   them into a parsed method + path + query params.
 - **`StaticFileHandler`** — the filing cabinet: serves files from `webroot/`,
@@ -64,9 +67,8 @@ JS client), but the teller counter itself still processes them one at a time.
 
 ## 3. Design decisions
 
-- **Why sequential:** the lab's explicit goal is to observe the baseline cost of
-  one connection at a time *before* introducing concurrency. Adding threads here
-  would hide the exact behavior the lab wants visible.
+- **Why the fixed pool:** the base lab made the sequential cost visible first;
+  section 15 adds a bounded pool so slow clients do not serialize all traffic.
 - **Why hardcoded routes:** `ApiHandler` uses direct `if`/`else` comparisons on the
   literal path instead of a router, reflection, or annotations, so the request → code
   mapping is fully explicit and traceable by reading one method top to bottom.
@@ -95,8 +97,9 @@ networking-lab2/
 │       └── banner.png
 ├── src/
 │   ├── main/java/edu/eci/arem/lab2/
-│   │   ├── Main.java                    # entry point, CLI args
-│   │   ├── server/SimpleHttpServer.java # the sequential accept() loop
+│   │   ├── Main.java                    # entry point, environment configuration
+│   │   ├── config/ServerConfig.java     # validated environment variables
+│   │   ├── server/SimpleHttpServer.java # acceptor, pool, graceful shutdown
 │   │   ├── http/                        # request/response/content-type plumbing
 │   │   ├── handler/                     # StaticFileHandler, ApiHandler
 │   │   └── util/JsonUtil.java           # manual JSON escaping
@@ -111,7 +114,7 @@ rebuilding.
 
 ## 5. Prerequisites
 
-- Java 17+ (JDK) — the code targets Java 17 language level.
+- Java 21+ (JDK) — the code targets Java 21.
 - Maven 3.8+
 - A terminal / browser to test locally.
 - For deployment: an AWS account with EC2 access, per your instructor's
@@ -122,7 +125,7 @@ rebuilding.
 ```bash
 git clone <TODO: your repository URL>
 cd networking-lab2
-mvn test      # runs the JUnit test suite
+mvn clean test # runs the JUnit test suite
 mvn package   # produces target/networking-lab2.jar (runnable fat jar)
 ```
 
@@ -130,11 +133,13 @@ mvn package   # produces target/networking-lab2.jar (runnable fat jar)
 
 ```bash
 # from the project root, so webroot/ is found via the relative default path
-java -jar target/networking-lab2.jar 8080 webroot
+PORT=8080 STATIC_FILES_PATH=webroot APP_ENV=development \
+  java -jar target/networking-lab2.jar
 ```
 
-- `8080` — the port (optional, defaults to `8080`).
-- `webroot` — path to the public resources directory (optional, defaults to `webroot`).
+- `PORT` — listening port (defaults to `8080`).
+- `STATIC_FILES_PATH` — public resources directory (defaults to `webroot`).
+- `APP_ENV=development` enables `/shutdown` and `/api/slow`; production disables both.
 
 Then open `http://localhost:8080/` in a browser. Shut down with `Ctrl+C`.
 
@@ -168,12 +173,11 @@ curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:8080/../../etc/passwd
 for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " http://localhost:8080/api/health; done  # ten 200s
 ```
 
-- **Sequential-limitation check (section 6.2):** open two browser tabs; in one,
-  request `/api/time` while a large/slow request is still pending in the other, and
-  observe (via DevTools → Network) that the second request's timeline does not
-  start until the first completes.
+- **Concurrency check:** run several `/api/slow?ms=3000` requests together and
+  compare the total time with the sequential baseline. Section 15 documents the
+  automated test and the measurement placeholder.
 
-## 10. AWS deployment
+## 10. AWS deployment (historical process)
 
 1. `mvn package` locally to produce `target/networking-lab2.jar`.
 2. Launch one EC2 instance (course-approved image/size); security group: SSH
@@ -182,15 +186,16 @@ for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " http://localhos
    ```bash
    scp target/networking-lab2.jar webroot -r ec2-user@<TODO: instance-ip>:/home/ec2-user/app/
    ```
-4. On the instance, install a matching Java runtime, then:
+4. On the instance, install Docker, then use the container deployment in section 15.
+  The earlier direct-Java command was:
    ```bash
    cd /home/ec2-user/app
    java -jar networking-lab2.jar 8080 webroot
    ```
 5. Verify `curl http://localhost:8080/api/health` from *inside* the instance first,
    then `http://<TODO: instance-public-ip>:8080/` from your own machine.
-6. Configure it as a systemd service so it survives SSH logout (see TODO unit file
-   below) and starts predictably with logs in a known location.
+6. The current deployment path is Docker. The systemd unit below is retained only
+  as a historical alternative for the pre-container lab.
 
 **TODO** — example systemd unit (adjust paths/user, then place at
 `/etc/systemd/system/networking-lab2.service`):
@@ -228,13 +233,13 @@ No credentials, private keys, or private IPs are committed to this repository.
 ## 12. Known limitations
 
 This server is intentionally **not production-ready**:
-- It is strictly sequential — one TCP connection is fully handled before the next
-  is accepted; there is no concurrency of any kind.
-- It supports only the `GET` method and exactly four hardcoded service routes.
+- The extension uses a fixed worker pool, but remains a small single-process server
+  with no load balancing, TLS termination, authentication, or persistence.
+- It supports only the `GET` method and a small set of explicitly registered routes.
 - It has no authentication, no HTTPS/TLS, no persistence, and no request logging
   beyond stdout.
-- It is a teaching baseline for a later architectural step (concurrency, then
-  distribution) — not a general-purpose web server.
+- It is a teaching server for concurrency, lifecycle management, containers, and
+  deployment — not a general-purpose web server.
 
 ## 13. Author and acknowledgment
 
@@ -249,14 +254,15 @@ linked in the lab guide (From a Minimal HTTP Server to a Web Application on AWS-
 This section documents the evolution of the sequential HTTP server described
 in sections 1–13 above into a small lambda-based web framework, per the
 "Building and Deploying a Maintainable Application Server" assignment.
-Nothing above this section changed behavior; this is additive. The framework
+The statements above describe the earlier stages; this section records the later
+additive framework changes. The framework
 API lives in `edu.eci.arem.lab2.framework` (`Router`, `Service`, `Response`,
 `WebFramework`); `ApiHandler` was retired, and its four routes now register
 through `get(...)` in `Main.java`.
  
 ### 14.1 Extended metaphor
-Reusing the single-window teller counter metaphor from section 2: the
-**lobby directory** (`Router`) tells the teller which reference-sheet
+Reusing the teller metaphor from section 2: the **lobby directory** (`Router`)
+tells each teller which reference-sheet
 procedure (`Service` lambda) to run for a given request, so adding a new
 procedure means updating the directory — not retraining the teller.
 `WebFramework` is the counter's manager: it decides which directory and
@@ -269,8 +275,8 @@ the current customer has been fully served.
 |---|---|
 | `staticfiles(String root)` | Sets the static-resource root directory |
 | `get(String path, Service service)` | Registers a GET route with a lambda handler |
-| `start()` / `start(int port)` | Starts the sequential server |
-| `stop()` | Marks the server to stop after the current response is sent |
+| `start()` / `start(int port)` | Starts the server and its worker pool |
+| `stop()` | Initiates the idempotent graceful shutdown |
  
 ### 14.3 New/updated environment variables
 | Variable | Purpose | Local default |
@@ -279,6 +285,8 @@ the current customer has been fully served.
 | `GREETING_PREFIX` | Prefix used by `/api/greeting` | `Hello` |
 | `APP_ENV` | `development` enables `/shutdown`; any other value disables it | `development` |
 | `STATIC_FILES_PATH` | Root folder for static resources | `webroot` |
+| `POOL_SIZE` | Fixed worker-pool size | `availableProcessors() * 2`, minimum `1` |
+| `SHUTDOWN_TIMEOUT_SECONDS` | Graceful-shutdown wait limit | `10` |
  
 ### 14.4 How to run locally (updated)
 ```bash
@@ -286,24 +294,14 @@ mvn package
 PORT=8080 APP_ENV=development GREETING_PREFIX=Hello \
   java -jar target/networking-lab2.jar
 ```
-`args[]` is no longer read by `Main`; all configuration is environment-based
-(section 7 above, describing CLI arguments for port/webroot, is superseded
-by this).
+`args[]` is not read by `Main`; all configuration is environment-based.
  
-### 14.5 Cloud deployment (updated)
-Same EC2 instance/process as section 10, with the systemd unit now setting
-environment variables instead of passing CLI args:
-```ini
-[Service]
-WorkingDirectory=/home/ec2-user/app
-Environment=PORT=8080
-Environment=APP_ENV=production
-Environment=GREETING_PREFIX=Hola
-ExecStart=/usr/bin/java -jar networking-lab2.jar
-Restart=on-failure
-```
+### 14.5 Cloud deployment (historical note)
+The current deployment uses Docker as documented in section 15. The old systemd
+process configuration from the first deployment stage remains above only as a
+historical alternative.
 **Cloud platform:** AWS EC2 (same instance as section 10).
-**Public URL:** `http://<TODO-instance-ip>:8080/`
+**Public URL:** `<TODO: public EC2 URL>`
  
 ### 14.6 Example URLs
 - Static: `http://<ip>:8080/`, `http://<ip>:8080/styles.css`, `http://<ip>:8080/images/logo.png`
@@ -319,8 +317,127 @@ curl -s -o /dev/null -w "%{http_code}\n" "http://<ip>:8080/shutdown"  # 404 expe
 ### 14.8 Why this stays maintainable
 Adding a new service now means one `get(...)` call in `Main.java` — no edits
 to `SimpleHttpServer`, `Router`, or the socket-handling loop. Routing,
-request parsing, static-file resolution, and the accept loop remain four
+request parsing, static-file resolution, and the acceptor/worker boundary remain
 separately testable components, each with one responsibility.
+
+---
+
+## 15. Framework Extension — Concurrency, Graceful Shutdown and Containers
+
+The current framework keeps the small JDK-only architecture and adds a bounded
+worker pool, idempotent graceful shutdown, environment configuration, and a
+container image ready for EC2. The acceptor thread only accepts sockets; workers
+read, route, respond, and always close their socket. The router publishes immutable
+snapshots after route registration, so concurrent reads are safe.
+
+### 15.1 Execution model
+
+```mermaid
+flowchart LR
+    Client[Client] --> EC2[EC2 instance]
+    EC2 --> Docker[Docker Engine]
+    Docker --> Container[Container]
+    Container --> Acceptor[accept thread]
+    Acceptor --> Pool[fixed worker pool]
+    Pool --> Router[immutable Router]
+    Pool --> Static[StaticFileHandler]
+```
+
+The updated metaphor is several tellers working in parallel from the same
+directory: the acceptor is the lobby attendant, the pool workers are tellers,
+the router is the directory, and `webroot/` is the shared filing cabinet.
+
+### 15.2 Extension changes
+
+- **Concurrency:** `POOL_SIZE` controls a fixed `ExecutorService`; a socket read
+  timeout of 10 seconds prevents a slow client from holding a worker forever.
+- **Graceful shutdown:** `stop()`, development `/shutdown`, and the JVM shutdown
+  hook share the same idempotent path. It stops accepting, closes the listening
+  socket, waits for workers, and interrupts only after the configured timeout.
+- **Environment configuration:** invalid numeric values produce a clear stderr
+  diagnostic and use a safe default.
+- **Development endpoint:** `GET /api/slow?ms=3000` sleeps for up to 10 seconds
+  and is available only when `APP_ENV=development`.
+- **Container:** Java 21 runs as PID 1 through the exec-form Docker entrypoint.
+
+### 15.3 Environment variables
+
+| Variable | Default | Validation / purpose |
+|---|---:|---|
+| `PORT` | `8080` | Integer from 1 to 65535 |
+| `STATIC_FILES_PATH` | `webroot` | Static-resource directory |
+| `APP_ENV` | `development` | Enables `/shutdown` and `/api/slow` only in development |
+| `GREETING_PREFIX` | `Hello` | Prefix for `/api/greeting` |
+| `POOL_SIZE` | `availableProcessors() * 2` | Integer, minimum 1 |
+| `SHUTDOWN_TIMEOUT_SECONDS` | `10` | Positive integer graceful-shutdown limit |
+
+### 15.4 Build and run locally
+
+```bash
+mvn clean test
+mvn package
+PORT=8080 APP_ENV=development POOL_SIZE=4 \
+  java -jar target/networking-lab2.jar
+```
+
+Useful checks:
+
+```bash
+curl -i http://localhost:8080/api/health
+curl -i "http://localhost:8080/api/slow?ms=3000"
+curl -i http://localhost:8080/shutdown
+```
+
+### 15.5 Docker
+
+```bash
+mvn package
+docker build -t <TODO: dockerhub-user>/networking-lab2:latest .
+docker run --name networking-lab2 -p 8080:8080 \
+  -e APP_ENV=production -e POOL_SIZE=4 \
+  --restart unless-stopped \
+  <TODO: dockerhub-user>/networking-lab2:latest
+curl -i http://localhost:8080/api/health
+docker stop networking-lab2
+```
+
+`compose.yaml` provides the equivalent local workflow with `docker compose up -d`
+and `docker compose down`. The Docker daemon was not running during this update,
+so the image build, health request, and stop-log verification remain TODO.
+
+### 15.6 EC2 deployment with Docker
+
+1. Launch an approved EC2 instance and allow TCP 22 only from the administrator's
+   IP and TCP 8080 from the intended clients in its security group.
+2. Install Docker on the instance and authenticate to the registry if needed.
+3. Publish and pull the image:
+   ```bash
+   docker pull <TODO: dockerhub-user>/networking-lab2:latest
+   ```
+4. Run it with restart policy and production configuration:
+   ```bash
+   docker run -d --name networking-lab2 \
+     -p 8080:8080 \
+     -e PORT=8080 -e APP_ENV=production \
+     --restart unless-stopped \
+     <TODO: dockerhub-user>/networking-lab2:latest
+   ```
+5. Verify locally on the instance with `curl http://localhost:8080/api/health`,
+   then verify the public endpoint after the security group is active.
+
+**Docker Hub URL:** `<TODO: Docker Hub repository URL>`
+**Public EC2 URL:** `<TODO: public EC2 DNS or IP URL>`
+
+### 15.7 Evidence and remaining limitations
+
+- Concurrency measurement before extension: `<TODO: N requests took ... ms>`.
+- Concurrency measurement with extension: `<TODO: N requests took ... ms>`.
+- Docker build/health/stop evidence: `<TODO: capture terminal output or screenshot>`.
+- EC2 evidence: `<TODO: capture security group, running container, and health response>`.
+- Commit evidence: `<TODO: commit hash + link>`.
+- Remaining limitations: GET-only API, no TLS, authentication, persistence, or
+  load balancing; static resources remain local to each container; no production
+  observability or request backpressure policy beyond the fixed pool.
 
 ---
 
@@ -347,13 +464,15 @@ separately testable components, each with one responsibility.
    (the UI thread isn't blocked waiting for `fetch()`), which is independent of
    how the server processes the underlying TCP connections.
 6. *What changed on EC2? What didn't?* The network location/reachability and the
-   physical host changed; the application code, its sequential behavior, and its
-   one-connection-at-a-time capacity limit did not.
+  physical host changed; the application code and its explicit routing contract
+  did not. The extension additionally packages the app as a Docker container.
 7. *What happens when two users send slow requests at almost the same time?* The
-   second user's request waits at the OS's connection backlog / `accept()` call
-   until the first user's full request/response cycle completes.
+  base lab answer is that the second user's request waits at the OS's connection
+  backlog / `accept()` call until the first cycle completes. In the extension,
+  the acceptor delegates both requests to workers, so they can overlap when the
+  pool has capacity.
 8. *What's the next architectural limitation, and why concurrency before load
-   balancing?* The next limitation is the single-threaded capacity ceiling itself;
-   concurrency (handling multiple connections at once, e.g. via threads) has to
-   exist before distributing across multiple instances makes sense — otherwise
-   you'd just be load-balancing across several equally-bottlenecked servers.
+  balancing?* This answer describes the sequential base lab: its next limitation
+  was the single-threaded capacity ceiling. The extension removes that specific
+  bottleneck with a fixed pool; the next limits are still one process, one host,
+  and no load balancing or backpressure policy.
